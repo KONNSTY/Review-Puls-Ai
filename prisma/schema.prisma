@@ -1,0 +1,250 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+
+  @@index([shop])
+}
+
+model Shop {
+  id                     String              @id @default(uuid()) @db.Uuid
+  shopifyDomain          String              @unique @map("shopify_domain") @db.VarChar(255)
+  accessToken            String              @map("access_token")
+  brandTone              String              @default("professional_friendly") @map("brand_tone")
+  brandValues            Json?               @map("brand_values")
+  autoReplyEnabled       Boolean             @default(false) @map("auto_reply_enabled")
+  autoReplyMinRating     Int                 @default(4) @map("auto_reply_min_rating")
+  supportEmail           String?             @map("support_email") @db.VarChar(320)
+  subscriptionPlan       String              @default("trial") @map("subscription_plan")
+  billingStatus          String              @default("trialing") @map("billing_status")
+  externalSubscriptionId String?             @unique @map("external_subscription_id")
+  locale                 String              @default("en")
+  companyValues          Json?               @map("company_values")
+  trialEndsAt            DateTime?           @map("trial_ends_at")
+  onboardingCompletedAt  DateTime?           @map("onboarding_completed_at")
+  uninstalledAt          DateTime?           @map("uninstalled_at")
+  tokenRevokedAt         DateTime?           @map("token_revoked_at")
+  createdAt              DateTime            @default(now()) @map("created_at")
+  updatedAt              DateTime            @updatedAt @map("updated_at")
+  reviews                Review[]
+  integrations           Integration[]
+  subscriptions          Subscription[]
+  usageCounters          UsageCounter[]
+  jobs                   Job[]
+  alerts                 Alert[]
+  gdprRequests           GdprRequest[]
+  auditLogs              AuditLog[]
+  onboardingProgress     OnboardingProgress?
+
+  @@index([billingStatus])
+  @@map("shops")
+}
+
+model Review {
+  id                String        @id @default(uuid()) @db.Uuid
+  shopId            String        @map("shop_id") @db.Uuid
+  externalReviewId  String        @map("external_review_id") @db.VarChar(255)
+  productTitle      String?       @map("product_title")
+  customerName      String?       @map("customer_name") @db.VarChar(255)
+  customerEmail     String?       @map("customer_email") @db.VarChar(320)
+  rating            Int
+  reviewText        String?       @map("review_text")
+  provider          String        @default("csv") @db.VarChar(64)
+  sentiment         String?
+  riskReasons       Json?         @map("risk_reasons")
+  generatedReply    String?       @map("generated_reply")
+  lastError         String?       @map("last_error")
+  status            String        @default("pending") @db.VarChar(32)
+  publishedAt       DateTime?     @map("published_at")
+  externalCreatedAt DateTime?     @map("external_created_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  shop              Shop          @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  replies           ReviewReply[]
+
+  @@unique([shopId, externalReviewId])
+  @@index([shopId, status, createdAt])
+  @@index([shopId, rating])
+  @@index([shopId, provider, externalReviewId])
+  @@map("reviews")
+}
+
+model Integration {
+  id             String    @id @default(uuid()) @db.Uuid
+  shopId         String    @map("shop_id") @db.Uuid
+  provider       String    @db.VarChar(64)
+  encryptedToken String?   @map("encrypted_token")
+  status         String    @default("disconnected") @db.VarChar(32)
+  syncCursor     String?   @map("sync_cursor")
+  lastSyncedAt   DateTime? @map("last_synced_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  shop           Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, provider])
+  @@map("integrations")
+}
+
+model WebhookEvent {
+  id              String    @id @default(uuid()) @db.Uuid
+  shopId          String?   @map("shop_id") @db.Uuid
+  providerEventId String    @map("provider_event_id") @db.VarChar(255)
+  topic           String    @db.VarChar(128)
+  apiVersion      String?   @map("api_version") @db.VarChar(32)
+  payloadHash     String    @map("payload_hash") @db.VarChar(128)
+  status          String    @default("received") @db.VarChar(32)
+  attempts        Int       @default(0)
+  receivedAt      DateTime  @default(now()) @map("received_at")
+  processedAt     DateTime? @map("processed_at")
+
+  @@unique([providerEventId, topic])
+  @@index([status, receivedAt])
+  @@map("webhook_events")
+}
+
+model ReviewReply {
+  id            String   @id @default(uuid()) @db.Uuid
+  reviewId      String   @map("review_id") @db.Uuid
+  content       String
+  source        String   @db.VarChar(32)
+  model         String?  @db.VarChar(80)
+  inputTokens   Int?     @map("input_tokens")
+  outputTokens  Int?     @map("output_tokens")
+  safetyReasons Json?    @map("safety_reasons")
+  createdAt     DateTime @default(now()) @map("created_at")
+  review        Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId, createdAt])
+  @@map("review_replies")
+}
+
+model UsageCounter {
+  id          String   @id @default(uuid()) @db.Uuid
+  shopId      String   @map("shop_id") @db.Uuid
+  periodStart DateTime @map("period_start") @db.Date
+  action      String   @db.VarChar(64)
+  count       Int      @default(0)
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@unique([shopId, periodStart, action])
+  @@map("usage_counters")
+}
+
+model Subscription {
+  id          String    @id @default(uuid()) @db.Uuid
+  shopId      String    @map("shop_id") @db.Uuid
+  plan        String    @db.VarChar(32)
+  status      String    @db.VarChar(32)
+  externalId  String?   @map("external_id") @db.VarChar(255)
+  periodStart DateTime? @map("period_start")
+  periodEnd   DateTime? @map("period_end")
+  trialEndsAt DateTime? @map("trial_ends_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, status])
+  @@map("subscriptions")
+}
+
+model Job {
+  id          String   @id @default(uuid()) @db.Uuid
+  shopId      String?  @map("shop_id") @db.Uuid
+  kind        String   @db.VarChar(64)
+  payload     Json
+  status      String   @default("queued") @db.VarChar(32)
+  attempts    Int      @default(0)
+  availableAt DateTime @default(now()) @map("available_at")
+  lastError   String?  @map("last_error")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  shop        Shop?    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([status, availableAt])
+  @@map("jobs")
+}
+
+model Alert {
+  id          String    @id @default(uuid()) @db.Uuid
+  shopId      String    @map("shop_id") @db.Uuid
+  severity    String    @db.VarChar(16)
+  kind        String    @db.VarChar(64)
+  destination String?   @db.VarChar(320)
+  status      String    @default("queued") @db.VarChar(32)
+  attempts    Int       @default(0)
+  lastError   String?   @map("last_error")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  sentAt      DateTime? @map("sent_at")
+  shop        Shop      @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, status, createdAt])
+  @@map("alerts")
+}
+
+model GdprRequest {
+  id                String    @id @default(uuid()) @db.Uuid
+  shopId            String?   @map("shop_id") @db.Uuid
+  requestType       String    @map("request_type") @db.VarChar(32)
+  externalRequestId String?   @unique @map("external_request_id") @db.VarChar(255)
+  customerId        String?   @map("customer_id") @db.VarChar(255)
+  dueAt             DateTime? @map("due_at")
+  status            String    @default("queued") @db.VarChar(32)
+  completedAt       DateTime? @map("completed_at")
+  evidenceHash      String?   @map("evidence_hash") @db.VarChar(128)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  shop              Shop?     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, requestType, status])
+  @@map("gdpr_requests")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  shopId     String?  @map("shop_id") @db.Uuid
+  actor      String   @db.VarChar(64)
+  action     String   @db.VarChar(96)
+  entityType String?  @map("entity_type") @db.VarChar(64)
+  entityId   String?  @map("entity_id") @db.VarChar(255)
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+  shop       Shop?    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@index([shopId, createdAt])
+  @@map("audit_logs")
+}
+
+model OnboardingProgress {
+  id               String   @id @default(uuid()) @db.Uuid
+  shopId           String   @unique @map("shop_id") @db.Uuid
+  toneCompleted    Boolean  @default(false) @map("tone_completed")
+  supportCompleted Boolean  @default(false) @map("support_completed")
+  demoCompleted    Boolean  @default(false) @map("demo_completed")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  shop             Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  @@map("onboarding_progress")
+}
