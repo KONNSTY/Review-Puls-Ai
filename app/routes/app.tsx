@@ -3,16 +3,13 @@ import { Outlet, useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
+import { isEncryptionKeyConfigured } from "../lib/secrets.server";
 import { authenticate } from "../shopify.server";
 import { ensureShop } from "../services/reviews.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  if (
-    session?.shop &&
-    session.accessToken &&
-    process.env.TOKEN_ENCRYPTION_KEY
-  ) {
+  if (session?.shop && session.accessToken && isEncryptionKeyConfigured()) {
     await ensureShop(session.shop, session.accessToken);
   }
 
@@ -42,5 +39,9 @@ export function ErrorBoundary() {
 }
 
 export const headers: HeadersFunction = (headersArgs) => {
-  return boundary.headers(headersArgs);
+  const headers = boundary.headers(headersArgs);
+  headers.set("Cache-Control", "private, no-store");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  return headers;
 };

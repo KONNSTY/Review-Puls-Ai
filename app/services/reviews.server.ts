@@ -4,6 +4,8 @@ import {
   type ReviewInput,
   type ReviewStatus,
 } from "../lib/domain";
+import { generationLimit, utcMonthStart } from "../lib/plans";
+import { importStatusPatch } from "../lib/review-import";
 import { encryptSecret } from "../lib/secrets.server";
 
 export async function ensureShop(shopifyDomain: string, accessToken: string) {
@@ -24,32 +26,39 @@ export async function ensureShop(shopifyDomain: string, accessToken: string) {
 }
 
 export async function upsertReview(shopId: string, input: ReviewInput) {
-  return db.review.upsert({
-    where: {
-      shopId_externalReviewId: {
-        shopId,
-        externalReviewId: input.externalReviewId,
-      },
-    },
-    create: {
+  const where = {
+    shopId_externalReviewId: {
       shopId,
       externalReviewId: input.externalReviewId,
-      productTitle: input.productTitle,
-      customerName: input.customerName,
-      customerEmail: input.customerEmail,
-      rating: input.rating,
-      reviewText: input.reviewText,
-      provider: input.provider,
-      externalCreatedAt: input.externalCreatedAt,
     },
-    update: {
-      productTitle: input.productTitle,
-      customerName: input.customerName,
-      customerEmail: input.customerEmail,
-      rating: input.rating,
-      reviewText: input.reviewText,
-      externalCreatedAt: input.externalCreatedAt,
-    },
+  };
+  const existing = await db.review.findUnique({
+    where,
+    select: { reviewText: true, rating: true },
+  });
+  const shared = {
+    productTitle: input.productTitle,
+    customerName: input.customerName,
+    customerEmail: input.customerEmail,
+    rating: input.rating,
+    reviewText: input.reviewText,
+    externalCreatedAt: input.externalCreatedAt,
+  };
+  const patch = importStatusPatch(existing, input);
+  if (!existing) {
+    return db.review.create({
+      data: {
+        shopId,
+        externalReviewId: input.externalReviewId,
+        provider: input.provider,
+        ...shared,
+        ...(patch ?? { status: "pending" }),
+      },
+    });
+  }
+  return db.review.update({
+    where,
+    data: { ...shared, ...(patch ?? {}) },
   });
 }
 
@@ -73,18 +82,10 @@ export async function transitionReview(
 }
 
 export async function reserveGeneration(shopId: string, plan: string) {
-  const limits: Record<string, number> = {
-    starter: 100,
-    growth: 500,
-    trial: 100,
-  };
-  const limit = limits[plan] ?? 0;
+  const limit = generationLimit(plan);
   if (limit <= 0)
     throw new Error("No generation quota is configured for this plan");
-  const now = new Date();
-  const periodStart = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
-  );
+  const periodStart = utcMonthStart();
   const counter = await db.usageCounter.upsert({
     where: {
       shopId_periodStart_action: {

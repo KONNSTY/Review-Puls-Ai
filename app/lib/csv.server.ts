@@ -14,13 +14,18 @@ const allowedColumns = [
   "created_at",
 ] as const;
 
+export const MAX_CSV_BYTES = 2 * 1024 * 1024;
+export const MAX_CSV_ROWS = 5000;
+
 export function sanitizeCsvCell(value: string) {
   const trimmed = value.trim();
-  return /^[=+\-@]/.test(trimmed) ? `'${trimmed}` : trimmed;
+  return /^[=+\-@\t\r]/.test(trimmed) ? `'${trimmed}` : trimmed;
 }
 
 export function importReviewsCsv(csv: string, provider = "csv") {
-  if (Buffer.byteLength(csv, "utf8") > 2 * 1024 * 1024)
+  if (!/^[a-z0-9_-]{1,32}$/.test(provider))
+    throw new Error("Unsupported review provider");
+  if (Buffer.byteLength(csv, "utf8") > MAX_CSV_BYTES)
     throw new Error("CSV file exceeds the 2 MB limit");
   const rows = parse(csv, {
     bom: true,
@@ -28,6 +33,8 @@ export function importReviewsCsv(csv: string, provider = "csv") {
     skip_empty_lines: true,
     relax_column_count: false,
   }) as Record<string, string>[];
+  if (rows.length > MAX_CSV_ROWS)
+    throw new Error("CSV file exceeds the 5000 row limit");
   const columns = Object.keys(rows[0] ?? {});
   const unknown = columns.filter(
     (column) =>

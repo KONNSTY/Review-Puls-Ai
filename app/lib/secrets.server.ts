@@ -1,11 +1,36 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
+const ENVELOPE = /^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/;
+
+export function isEncryptionKeyConfigured() {
+  return /^[a-f0-9]{64}$/i.test(process.env.TOKEN_ENCRYPTION_KEY ?? "");
+}
+
 function key() {
-  const configured = process.env.TOKEN_ENCRYPTION_KEY;
-  if (!configured || !/^[a-f0-9]{64}$/i.test(configured)) {
+  if (!isEncryptionKeyConfigured()) {
     throw new Error("TOKEN_ENCRYPTION_KEY must be a 32-byte hex key");
   }
-  return Buffer.from(configured, "hex");
+  return Buffer.from(process.env.TOKEN_ENCRYPTION_KEY ?? "", "hex");
+}
+
+export function tokenNeedsSeal(value: string) {
+  return Boolean(value) && isEncryptionKeyConfigured() && !ENVELOPE.test(value);
+}
+
+export function sealToken(value: string) {
+  if (!value || !isEncryptionKeyConfigured() || ENVELOPE.test(value))
+    return value;
+  return encryptSecret(value);
+}
+
+export function openToken(value: string) {
+  if (!value || !ENVELOPE.test(value) || !isEncryptionKeyConfigured())
+    return value;
+  try {
+    return decryptSecret(value);
+  } catch {
+    return value;
+  }
 }
 
 export function encryptSecret(plaintext: string) {

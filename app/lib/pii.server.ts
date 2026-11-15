@@ -14,9 +14,10 @@ export function redactPii(input: string): {
   let text = input;
   const redactions: Redaction[] = [];
   for (const [pattern, replacement] of piiPatterns) {
-    const matches = text.match(pattern);
+    const matcher = new RegExp(pattern.source, pattern.flags);
+    const matches = text.match(matcher);
     if (matches?.length) {
-      text = text.replace(pattern, replacement);
+      text = text.replace(matcher, replacement);
       redactions.push({
         label: replacement.slice(1, -1),
         count: matches.length,
@@ -30,4 +31,18 @@ export function containsUnmaskedPii(input: string) {
   return piiPatterns.some(([pattern]) =>
     new RegExp(pattern.source, pattern.flags.replace("g", "")).test(input),
   );
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function scrubText(value: string | null | undefined, needles: string[]) {
+  if (value == null) return value ?? null;
+  let next = value;
+  for (const needle of needles) {
+    if (!needle) continue;
+    next = next.replace(new RegExp(escapeRegExp(needle), "gi"), "[REDACTED]");
+  }
+  return next;
 }

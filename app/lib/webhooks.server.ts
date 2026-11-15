@@ -20,3 +20,9 @@ export function verifyShopifyHmac(
 export function payloadHash(rawBody: string) {
   return createHash("sha256").update(rawBody, "utf8").digest("hex");
 }
+
+export function webhookEventId(eventId: string | null, payload: unknown) {
+  const trimmed = eventId?.trim();
+  if (trimmed) return trimmed.slice(0, 255);
+  return payloadHash(JSON.stringify(payload ?? null)).slice(0, 255);
+}

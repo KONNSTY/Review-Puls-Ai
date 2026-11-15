@@ -1,28 +1,15 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import db from "../db.server";
+import { handleWebhook } from "../lib/webhook-events.server";
+import { redactShop } from "../services/privacy.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shop } = await authenticate.webhook(request);
-  const externalRequestId =
-    request.headers.get("x-shopify-webhook-id") ?? `shop-redact:${shop}`;
-  const tenant = await db.shop.findUnique({
-    where: { shopifyDomain: shop },
-    select: { id: true },
+  const { shop, topic, payload } = await authenticate.webhook(request);
+  const eventId = request.headers.get("x-shopify-webhook-id");
+  const externalRequestId = (
+    eventId ? `${shop}:${eventId}` : `${shop}:shop-redact`
+  ).slice(0, 255);
+  return handleWebhook({ topic, eventId, payload }, async () => {
+    await redactShop(shop, externalRequestId);
   });
-  if (tenant) {
-    await db.gdprRequest.upsert({
-      where: { externalRequestId },
-      create: {
-        shopId: tenant.id,
-        requestType: "shop/redact",
-        externalRequestId,
-        status: "completed",
-        completedAt: new Date(),
-      },
-      update: { status: "completed", completedAt: new Date() },
-    });
-    await db.shop.delete({ where: { id: tenant.id } });
-  }
-  return new Response(null, { status: 200 });
 };

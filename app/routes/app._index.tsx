@@ -30,7 +30,7 @@ export default function Dashboard() {
       {data.escalated > 0 && (
         <s-banner
           tone="critical"
-          heading={`${data.escalated} review needs attention`}
+          heading={`${data.escalated} ${data.escalated === 1 ? "review needs" : "reviews need"} attention`}
         >
           <s-text>
             Critical content is always blocked from auto-publish. Review the

@@ -2,17 +2,13 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
-import { generateReply } from "../lib/ai.server";
-import { importReviewsCsv } from "../lib/csv.server";
-import { classifyReview } from "../lib/risk";
+import { importReviewsCsv, MAX_CSV_BYTES } from "../lib/csv.server";
+import { canTransition, type ReviewStatus } from "../lib/domain";
+import { classifyReview, replyViolatesOutputPolicy } from "../lib/risk";
 import { getDashboard } from "../services/dashboard.server";
+import { generateStoredReply } from "../services/generation.server";
 import { createProviderAdapter } from "../services/integrations.server";
-import {
-  releaseGeneration,
-  reserveGeneration,
-  transitionReview,
-  upsertReview,
-} from "../services/reviews.server";
+import { transitionReview, upsertReview } from "../services/reviews.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -28,120 +24,106 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ok: true,
       message: "Preview mode: connect Supabase to persist this action.",
     };
-  const shop = await db.shop.findFirstOrThrow({
+  const shop = await db.shop.findUnique({
     where: { shopifyDomain: session.shop },
   });
+  if (!shop)
+    return {
+      ok: false,
+      message:
+        "The shop record is not ready yet. Reload the app and try again.",
+    };
   if (intent === "import-csv") {
     const file = form.get("file");
     if (!(file instanceof File))
       return { ok: false, message: "Choose a CSV file first." };
-    const result = importReviewsCsv(await file.text());
-    for (const review of result.imported) await upsertReview(shop.id, review);
+    if (file.size > MAX_CSV_BYTES)
+      return { ok: false, message: "CSV file exceeds the 2 MB limit." };
+    let result: ReturnType<typeof importReviewsCsv>;
+    try {
+      result = importReviewsCsv(await file.text());
+    } catch {
+      return {
+        ok: false,
+        message:
+          "The CSV file could not be imported. Check the template and try again.",
+      };
+    }
+    try {
+      for (const review of result.imported) await upsertReview(shop.id, review);
+    } catch {
+      return {
+        ok: false,
+        message: "The reviews could not be saved. Try the import again.",
+      };
+    }
     return {
       ok: true,
       message: `Imported ${result.imported.length} reviews; ${result.errors.length} rows need correction.`,
     };
   }
   const reviewId = String(form.get("reviewId") || "");
-  const review = await db.review.findFirstOrThrow({
+  const review = await db.review.findFirst({
     where: { id: reviewId, shopId: shop.id },
   });
+  if (!review) return { ok: false, message: "Review not found." };
   if (intent === "generate") {
-    const currentStatus = review.status as
-      "pending" | "manual_review" | "failed";
-    if (!["pending", "manual_review", "failed"].includes(currentStatus)) {
+    const outcome = await generateStoredReply({ shop, review });
+    if (outcome.type === "escalated")
+      return {
+        ok: false,
+        message: "This review was escalated and cannot be auto-replied.",
+      };
+    if (outcome.type === "ineligible")
       return {
         ok: false,
         message:
           "Only pending, manual-review, or failed reviews can be generated.",
       };
-    }
-    const safety = classifyReview(review.rating, review.reviewText ?? "");
-    if (safety.escalated) {
-      await transitionReview(review.id, shop.id, currentStatus, "escalated", {
-        sentiment: safety.sentiment,
-        riskReasons: safety.reasons,
-      });
+    if (outcome.type === "quota")
       return {
         ok: false,
-        message: "This review was escalated and cannot be auto-replied.",
+        message: "The monthly reply limit has been reached.",
       };
-    }
-    let generationStarted = false;
-    let quotaReservation: Awaited<ReturnType<typeof reserveGeneration>> | null =
-      null;
-    try {
-      if (currentStatus === "manual_review")
-        await transitionReview(review.id, shop.id, "manual_review", "pending");
-      await transitionReview(
-        review.id,
-        shop.id,
-        currentStatus === "manual_review" ? "pending" : currentStatus,
-        "generating",
-      );
-      generationStarted = true;
-      quotaReservation = await reserveGeneration(
-        shop.id,
-        shop.subscriptionPlan,
-      );
-      const output = await generateReply({
-        brandTone: shop.brandTone,
-        brandValues: Array.isArray(shop.brandValues)
-          ? shop.brandValues.map(String)
-          : ["care", "clarity"],
-        productTitle: review.productTitle,
-        rating: review.rating,
-        reviewText: review.reviewText ?? "",
-        supportEmail: shop.supportEmail,
-      });
-      const nextStatus = output.requires_manual_review
-        ? "manual_review"
-        : "pending";
-      await transitionReview(review.id, shop.id, "generating", nextStatus, {
-        generatedReply: output.reply || null,
-        sentiment: output.sentiment,
-        riskReasons: output.risk_reasons,
-        lastError: null,
-      });
-      await db.reviewReply.create({
-        data: {
-          reviewId: review.id,
-          content: output.reply || "",
-          source: "ai",
-          model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-          safetyReasons: output.risk_reasons,
-        },
-      });
+    if (outcome.type === "conflict")
       return {
-        ok: true,
-        message: output.requires_manual_review
-          ? "Draft created for manual review."
-          : "Draft generated.",
+        ok: false,
+        message:
+          "This review changed while the reply was being generated. Reload and try again.",
       };
-    } catch (error) {
-      if (quotaReservation)
-        await releaseGeneration(shop.id, quotaReservation.periodStart).catch(
-          () => undefined,
-        );
-      if (generationStarted) {
-        await transitionReview(review.id, shop.id, "generating", "failed", {
-          lastError:
-            error instanceof Error ? error.message : "Generation failed",
-        }).catch(() => undefined);
-      }
+    if (outcome.type === "failed")
       return {
         ok: false,
         message: "Generation failed; the review can be retried safely.",
       };
-    }
+    return {
+      ok: true,
+      message: outcome.requiresManualReview
+        ? "Draft created for manual review."
+        : "Draft generated.",
+    };
   }
+  const draft = review.generatedReply?.trim() ?? "";
+  const unsafe =
+    classifyReview(review.rating, review.reviewText ?? "").escalated ||
+    replyViolatesOutputPolicy(draft);
   if (intent === "approve") {
-    if (!review.generatedReply?.trim())
+    if (!draft)
       return { ok: false, message: "Generate a draft before approving." };
+    if (unsafe)
+      return {
+        ok: false,
+        message: "This draft is blocked until the safety issues are resolved.",
+      };
+    if (!canTransition(review.status as ReviewStatus, "approved"))
+      return {
+        ok: false,
+        message: "This review cannot be approved from its current state.",
+      };
     await transitionReview(
       review.id,
       shop.id,
-      review.status as "pending" | "manual_review",
+      review.status as ReviewStatus,
       "approved",
     );
     return {
@@ -150,8 +132,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
   if (intent === "publish") {
-    if (review.status !== "approved" || !review.generatedReply?.trim())
+    if (review.status !== "approved" || !draft)
       return { ok: false, message: "Approve the draft before publishing." };
+    if (unsafe)
+      return {
+        ok: false,
+        message: "This draft is blocked until the safety issues are resolved.",
+      };
     await transitionReview(review.id, shop.id, "approved", "publishing");
     try {
       const result = await createProviderAdapter(review.provider).publishReply(
@@ -168,9 +155,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ok: true,
         message: "Reply published after provider confirmation.",
       };
-    } catch (error) {
+    } catch {
       await transitionReview(review.id, shop.id, "publishing", "failed", {
-        lastError: error instanceof Error ? error.message : "Provider error",
+        lastError: "provider_publish_failed",
       }).catch(() => undefined);
       return {
         ok: false,
@@ -180,10 +167,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
   if (intent === "escalate") {
+    if (!canTransition(review.status as ReviewStatus, "escalated"))
+      return {
+        ok: false,
+        message: "This review cannot be escalated from its current state.",
+      };
     await transitionReview(
       review.id,
       shop.id,
-      review.status as "pending" | "manual_review",
+      review.status as ReviewStatus,
       "escalated",
     );
     return { ok: true, message: "Review escalated; auto-publish is blocked." };

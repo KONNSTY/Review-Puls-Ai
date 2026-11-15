@@ -1,4 +1,9 @@
 import db from "../db.server";
+import {
+  generationLimit,
+  publishSuccessRate,
+  utcMonthStart,
+} from "../lib/plans";
 
 export type DashboardReview = {
   id: string;
@@ -49,8 +54,21 @@ const demoReviews: DashboardReview[] = [
   },
 ];
 
-export async function getDashboard(shopId?: string) {
-  if (!shopId || !process.env.DATABASE_URL) {
+function emptyDashboard(limit = 0) {
+  return {
+    isDemo: false,
+    reviews: [] as DashboardReview[],
+    pending: 0,
+    escalated: 0,
+    averageRating: 0,
+    generatedThisMonth: 0,
+    limit,
+    publishSuccess: 0,
+  };
+}
+
+export async function getDashboard(shopifyDomain?: string) {
+  if (!shopifyDomain || !process.env.DATABASE_URL) {
     return {
       isDemo: true,
       reviews: demoReviews,
@@ -62,31 +80,41 @@ export async function getDashboard(shopId?: string) {
       publishSuccess: 96,
     };
   }
-  const [reviews, pending, escalated, average, generated, shop] =
-    await Promise.all([
-      db.review.findMany({
-        where: { shopId },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-      }),
-      db.review.count({ where: { shopId, status: "pending" } }),
-      db.review.count({ where: { shopId, status: "escalated" } }),
-      db.review.aggregate({ where: { shopId }, _avg: { rating: true } }),
-      db.reviewReply.count({
-        where: {
-          review: { shopId },
-          source: "ai",
-          createdAt: {
-            gte: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
-          },
-        },
-      }),
-      db.shop.findFirstOrThrow({
-        where: { id: shopId },
-        select: { subscriptionPlan: true },
-      }),
-    ]);
-  const limit = shop.subscriptionPlan === "growth" ? 500 : 100;
+  const shop = await db.shop.findUnique({
+    where: { shopifyDomain },
+    select: { id: true, subscriptionPlan: true },
+  });
+  if (!shop) return emptyDashboard(generationLimit("trial"));
+  const shopId = shop.id;
+  const [
+    reviews,
+    pending,
+    escalated,
+    average,
+    generated,
+    published,
+    publishFailed,
+  ] = await Promise.all([
+    db.review.findMany({
+      where: { shopId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    db.review.count({ where: { shopId, status: "pending" } }),
+    db.review.count({ where: { shopId, status: "escalated" } }),
+    db.review.aggregate({ where: { shopId }, _avg: { rating: true } }),
+    db.reviewReply.count({
+      where: {
+        review: { shopId },
+        source: "ai",
+        createdAt: { gte: utcMonthStart() },
+      },
+    }),
+    db.review.count({ where: { shopId, status: "published" } }),
+    db.review.count({
+      where: { shopId, lastError: "provider_publish_failed" },
+    }),
+  ]);
   return {
     isDemo: false,
     reviews: reviews.map((review) => ({
@@ -104,7 +132,7 @@ export async function getDashboard(shopId?: string) {
     escalated,
     averageRating: Number((average._avg.rating ?? 0).toFixed(1)),
     generatedThisMonth: generated,
-    limit,
-    publishSuccess: 96,
+    limit: generationLimit(shop.subscriptionPlan),
+    publishSuccess: publishSuccessRate(published, publishFailed),
   };
 }

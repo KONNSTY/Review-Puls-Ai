@@ -58,6 +58,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       message:
         "Preview mode: settings validate successfully but are not persisted.",
     };
+  const shop = await db.shop.findUnique({
+    where: { shopifyDomain: session.shop },
+    select: { id: true },
+  });
+  if (!shop)
+    return {
+      ok: false,
+      message:
+        "The shop record is not ready yet. Reload the app and try again.",
+    };
   await db.shop.update({
     where: { shopifyDomain: session.shop },
     data: {
@@ -87,6 +97,9 @@ export default function SettingsPage() {
         </s-text>
         <Form method="post">
           <s-select label="Tone" name="brandTone" value={data.brandTone}>
+            <s-option value="professional_friendly">
+              Professional & friendly
+            </s-option>
             <s-option value="casual_du_form">Casual & direct</s-option>
             <s-option value="professional_sie_form">
               Professional & formal

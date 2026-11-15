@@ -46,6 +46,21 @@ export function classifyReview(
   };
 }
 
+export function replyViolatesOutputPolicy(reply: string) {
+  return (
+    containsUnmaskedPii(reply) ||
+    /https?:\/\//i.test(reply) ||
+    /\bwww\./i.test(reply)
+  );
+}
+
+export function replyNeedsHumanReview(reply: string) {
+  return (
+    replyViolatesOutputPolicy(reply) ||
+    /\b(refund|discount|guarantee|erstattung|rabatt|garantie)\b/i.test(reply)
+  );
+}
+
 export function isAutoReplyEligible(args: {
   rating: number;
   minRating: number;
@@ -54,16 +69,11 @@ export function isAutoReplyEligible(args: {
   autoReplyEnabled: boolean;
 }) {
   const safety = classifyReview(args.rating, args.text);
-  const replyRisk =
-    /https?:\/\/|\b(refund|discount|guarantee|erstattung|rabatt|garantie)\b/i.test(
-      args.generatedReply,
-    );
   return (
     args.autoReplyEnabled &&
     args.rating >= args.minRating &&
     !safety.escalated &&
     !containsUnmaskedPii(args.text) &&
-    !containsUnmaskedPii(args.generatedReply) &&
-    !replyRisk
+    !replyNeedsHumanReview(args.generatedReply)
   );
 }

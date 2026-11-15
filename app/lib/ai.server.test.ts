@@ -59,5 +59,34 @@ describe("AI reply pipeline", () => {
     expect(result.requires_manual_review).toBe(true);
     expect(result.reply).toBe("");
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "error" });
+  });
+
+  it("holds refund language for a person to review", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          output_text: JSON.stringify({
+            sentiment: "negative",
+            reply: "We guarantee a refund today.",
+            requires_manual_review: false,
+            risk_reasons: [],
+          }),
+        }),
+        { status: 200 },
+      ),
+    );
+    const result = await generateReply(
+      {
+        brandTone: "direct",
+        brandValues: ["care", "clarity"],
+        rating: 2,
+        reviewText: "The mug arrived late.",
+        supportEmail: "support@example.com",
+      },
+      fetchMock as unknown as typeof fetch,
+    );
+    expect(result.requires_manual_review).toBe(true);
+    expect(result.reply).toContain("refund");
   });
 });

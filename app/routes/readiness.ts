@@ -1,9 +1,12 @@
+import { isEncryptionKeyConfigured } from "../lib/secrets.server";
+
 export const loader = () => {
+  const encryption = isEncryptionKeyConfigured();
   const configured = Boolean(
     process.env.SHOPIFY_API_KEY &&
     process.env.SHOPIFY_API_SECRET &&
     process.env.DATABASE_URL &&
-    process.env.TOKEN_ENCRYPTION_KEY,
+    encryption,
   );
   return Response.json(
     {
@@ -13,9 +16,12 @@ export const loader = () => {
           process.env.SHOPIFY_API_KEY && process.env.SHOPIFY_API_SECRET,
         ),
         database: Boolean(process.env.DATABASE_URL),
-        encryption: Boolean(process.env.TOKEN_ENCRYPTION_KEY),
+        encryption,
       },
     },
-    { status: configured ? 200 : 503 },
+    {
+      status: configured ? 200 : 503,
+      headers: { "Cache-Control": "no-store" },
+    },
   );
 };

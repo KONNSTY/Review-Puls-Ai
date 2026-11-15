@@ -15,6 +15,13 @@ export default async function handleRequest(
   reactRouterContext: EntryContext,
 ) {
   addDocumentResponseHeaders(request, responseHeaders);
+  if (!responseHeaders.has("Content-Security-Policy")) {
+    responseHeaders.set("Content-Security-Policy", "frame-ancestors 'none'");
+  }
+  responseHeaders.set("X-Content-Type-Options", "nosniff");
+  if (!responseHeaders.has("Referrer-Policy")) {
+    responseHeaders.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  }
   const userAgent = request.headers.get("user-agent");
   const callbackName = isbot(userAgent ?? "") ? "onAllReady" : "onShellReady";
 

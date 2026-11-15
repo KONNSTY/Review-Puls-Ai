@@ -51,6 +51,7 @@ export type ReviewInput = z.infer<typeof reviewInputSchema>;
 
 export const settingsSchema = z.object({
   brandTone: z.enum([
+    "professional_friendly",
     "casual_du_form",
     "professional_sie_form",
     "humorous_direct",
@@ -60,7 +61,7 @@ export const settingsSchema = z.object({
   ]),
   brandValues: z.array(z.string().trim().min(1).max(80)).min(2).max(3),
   supportEmail: z.string().email().max(320),
-  autoReplyEnabled: z.coerce.boolean().default(false),
+  autoReplyEnabled: z.boolean().default(false),
   autoReplyMinRating: z.coerce.number().int().min(4).max(5).default(4),
 });
 
